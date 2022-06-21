@@ -1,0 +1,5 @@
+__pycache__
+checkpoints
+runs
+run_tensorboard.sh
+data
