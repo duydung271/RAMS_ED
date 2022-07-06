@@ -2,6 +2,9 @@ import torch
 
 from torch.nn import *
 from transformers import AutoModel
+import torch.nn as nn
+import torch.nn.functional as F
+from layers import GraphConvolution
 
 class BertEmbedding(Module):
 
@@ -21,6 +24,7 @@ class BertEmbedding(Module):
         BL = torch.max(inputs['bert_length'])
 
         indices = inputs['indices'][:, :BL].to(self.device)
+
         attention_mask = inputs['attention_mask'][:, :BL].to(self.device)
 
         bert_outputs = self.bert(indices,
@@ -33,11 +37,16 @@ class BertEmbedding(Module):
         all_embeddings = []
 
         for sid, sentence_spans in enumerate(inputs['word_spans']):
+            sent_embeddings = []
             for start, end in sentence_spans:
                 emb = torch.mean(bert_x[sid][start:end], dim=-2)
                 # print('emb', tuple(emb.shape))
-                all_embeddings.append(emb)
-        all_embeddings = torch.stack(all_embeddings)
+                # all_embeddings.append(emb)
+                sent_embeddings.append(emb)
+            sent_embeddings = torch.stack(sent_embeddings)
+            all_embeddings.append(sent_embeddings)
+ 
+        # all_embeddings = torch.stack(all_embeddings)
 
         return all_embeddings
 
@@ -130,8 +139,6 @@ class LSTMModel(Module):
         x = embeddings.view(-1,1,8*768) #(B_L,1,M*D)
         out, hidden = self.lstm(x)
         out = out.view(-1, 1024)
-        # x = torch.transpose(x,0,1)
-        # print(out.shape)
         logits = self.fc(out)
         preds = torch.argmax(logits, dim=-1)
 
@@ -167,12 +174,46 @@ class GRUModel(Module):
 
         return logits, preds
 
+class GCN(nn.Module):
+    def __init__(self, args):
+        super(GCN, self).__init__()
+        self.embeddings = BertEmbedding(args)
+        self.device = args.device
+        
+        self.c = len(args.label2index)
+        self.gc1 = GraphConvolution(8*768, 1024)
+        self.gc2 = GraphConvolution(1024, self.c)
+        self.dropout = args.dropout
+
+    def forward(self, inputs):
+
+        adj_matrixs = inputs['adj_matrix']
+        embeddings = self.embeddings(inputs)
+        
+        logits = torch.empty((0,self.c)).to(self.device)
+
+        for i in range(len(embeddings)):
+            x = embeddings[i]
+            adj = torch.from_numpy(adj_matrixs[i]).type(torch.FloatTensor).to(self.device)
+
+            x = F.relu(self.gc1(x, adj))
+            x = F.dropout(x, self.dropout, training=self.training)
+            x = self.gc2(x, adj)
+            x= F.log_softmax(x, dim=1)
+            
+            logits = torch.cat((logits, x), dim = 0)
+
+        preds = torch.argmax(logits, dim=-1)
+
+        return logits, preds
+
+
 if __name__ == '__main__':
 
     # args = arugment_parser().parse_args()
 
-    input = torch.randn(20,1, 8*768)
-    model = torch.nn.LSTM(8*768, 1024)
-    out, hidden = model(input)
-    print(out.shape)
+    # input = torch.randn(20,1, 8*768)
+    # model = torch.nn.LSTM(8*768, 1024)
+    # out, hidden = model(input)
+    # print(out.shape)
     pass

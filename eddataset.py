@@ -2,6 +2,7 @@ import transformers
 from torch.utils.data import Dataset, DataLoader
 import json
 import torch
+import pickle
 
 
 def load_json(path):
@@ -48,12 +49,18 @@ def load_sentence_data(path):
             data.append((words, sent_labels))
     return data
 
+def load_adj_matrixs(path):
+    adj_matrixs = []
+    with open(path, 'rb') as f:
+        adj_matrixs = pickle.load(f)
+    return adj_matrixs
 
 class EDDataset(Dataset):
 
     def __init__(self, path, label2index, tokenizer, args):
         super(EDDataset, self).__init__()
-        self.sentence_data = load_sentence_data(path)
+        self.sentence_data = load_sentence_data(path['sentence_data'])
+        self.adj_matrixs = load_adj_matrixs(path['adj_matrixs'])
         self.label2index = label2index
         self.tokenizer = tokenizer
         self.CLS = self.tokenizer.cls_token_id
@@ -71,6 +78,7 @@ class EDDataset(Dataset):
     def __getitem__(self, item):
         words, labels = self.sentence_data[item]
         word_length = len(words)
+        adj_matrix = self.adj_matrixs[item]
 
         all_pieces = [self.CLS]
         all_spans = []
@@ -102,7 +110,8 @@ class EDDataset(Dataset):
             'word_spans': all_spans,
             'bert_length': cls_text_sep_length,
             'word_length': word_length,
-            'target': targets
+            'target': targets,
+            'adj_matrix': adj_matrix
         }
 
     @staticmethod
@@ -130,7 +139,8 @@ TENSOR_TYPES = {
     'word_spans': keep,
     'bert_length': torch.LongTensor,
     'word_length': torch.LongTensor,
-    'target': flatten
+    'target': flatten,
+    'adj_matrix': keep
 }
 
 if __name__ == '__main__':

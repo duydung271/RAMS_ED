@@ -19,11 +19,26 @@ def arugment_parser():
     parser.add_argument('--update_bert', default=False, action='store_true')
 
     parser.add_argument('--bert_type', type=str, default='bert-base-cased')
+    parser.add_argument('--dropout', type=float, default=0.5,
+                    help='Dropout rate (1 - keep probability).')
     return parser
 
 def save_model(model, path, name):
     torch.save(model.state_dict(), os.path.join(path, name))
 
+
+train_path ={
+    'sentence_data': 'data/train.jsonlines',
+    'adj_matrixs': 'data/adj_matrixs/train.mat'
+}
+test_path ={
+    'sentence_data': 'data/test.jsonlines',
+    'adj_matrixs': 'data/adj_matrixs/test.mat'
+}
+dev_path ={
+    'sentence_data': 'data/dev.jsonlines',
+    'adj_matrixs': 'data/adj_matrixs/dev.mat'
+}
 
 def train(args):
     args.device = device = 'cuda'
@@ -31,9 +46,9 @@ def train(args):
     tokenizer = AutoTokenizer.from_pretrained(args.bert_type)
     writer = SummaryWriter()
 
-    train_dataset = EDDataset('data/train.jsonlines', label2index, tokenizer, args)
-    dev_dataset = EDDataset('data/dev.jsonlines', label2index, tokenizer, args)
-    test_dataset = EDDataset('data/test.jsonlines', label2index, tokenizer, args)
+    train_dataset = EDDataset(train_path, label2index, tokenizer, args)
+    dev_dataset = EDDataset(dev_path, label2index, tokenizer, args)
+    test_dataset = EDDataset(test_path, label2index, tokenizer, args)
 
     train_dl = DataLoader(train_dataset,
                           batch_size=args.batch_size,
@@ -51,8 +66,8 @@ def train(args):
                          shuffle=False,
                          collate_fn=EDDataset.pack)
 
-    model = GRUModel(args).to(device)
-    version = 'gru'
+    model = GCN(args).to(device)
+    version = 'gcn'
  
     params = [x for x in model.parameters() if x.requires_grad]
     weight = [1.0] + [10.0 for _ in range(1, len(label2index))]
