@@ -3,6 +3,7 @@ from torch.utils.data import Dataset, DataLoader
 import json
 import torch
 import pickle
+import numpy as np
 
 
 def load_json(path):
@@ -78,13 +79,20 @@ class EDDataset(Dataset):
     def __getitem__(self, item):
         words, labels = self.sentence_data[item]
         word_length = len(words)
-        adj_matrix = self.adj_matrixs[item]
+        adj = self.adj_matrixs[item]
+        adj_shape = adj.shape
+        adj_matrix = np.zeros((self.WML, self.WML), dtype=np.float32)
+        adj_matrix[:adj_shape[0],:adj_shape[1]] = adj
 
+        transform_matrix = np.zeros((self.WML,self.BML,), dtype=np.float32)
         all_pieces = [self.CLS]
+        transform_matrix[0,len(all_pieces)-1] = 1.0
         all_spans = []
         targets = [self.label2index[x] for x in labels]
 
-        for word in words:
+        
+
+        for idx,word in enumerate(words):
             tokens = self.tokenizer.tokenize(word)
             pieces = self.tokenizer.convert_tokens_to_ids(tokens)
             if len(pieces) == 0:
@@ -93,8 +101,15 @@ class EDDataset(Dataset):
             all_pieces += pieces
             end = len(all_pieces)
             all_spans.append([start, end])
+
+            if len(pieces) != 0:
+                piece_num = len(pieces)
+                mean_matrix = np.full((piece_num), 1.0/piece_num)
+                transform_matrix[idx+1,start:end] = mean_matrix
+
         all_pieces.append(self.SEP)
         cls_text_sep_length = len(all_pieces)
+        transform_matrix[len(words),cls_text_sep_length-1] = 1.0
 
         assert len(all_pieces) <= self.BML
         pad_len = self.BML - len(all_pieces)
@@ -111,7 +126,8 @@ class EDDataset(Dataset):
             'bert_length': cls_text_sep_length,
             'word_length': word_length,
             'target': targets,
-            'adj_matrix': adj_matrix
+            'adj_matrix': adj_matrix,
+            'transform_matrix': transform_matrix
         }
 
     @staticmethod
@@ -125,6 +141,10 @@ class EDDataset(Dataset):
 def keep(items):
     return items
 
+def np_to_tensor(items):
+    tensors = [torch.from_numpy(item) for item in items]
+    tensors = torch.stack(tensors,dim = 0)
+    return tensors
 
 def flatten(items):
     all_items =  [y for x in items for y in x]
@@ -140,7 +160,8 @@ TENSOR_TYPES = {
     'bert_length': torch.LongTensor,
     'word_length': torch.LongTensor,
     'target': flatten,
-    'adj_matrix': keep
+    'adj_matrix': np_to_tensor,
+    'transform_matrix': np_to_tensor
 }
 
 if __name__ == '__main__':

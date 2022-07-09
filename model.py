@@ -22,6 +22,7 @@ class BertEmbedding(Module):
     def forward(self, inputs):
 
         BL = torch.max(inputs['bert_length'])
+        WL = torch.max(inputs['word_length'])
 
         indices = inputs['indices'][:, :BL].to(self.device)
 
@@ -33,22 +34,11 @@ class BertEmbedding(Module):
 
         bert_x = torch.concat(bert_outputs['hidden_states'][-8:], dim=-1)  # B x L x D
         # print('Bert x', tuple(bert_x.shape))
+        transforms = inputs['transform_matrix'][:,:WL+2,:BL].to(self.device) #WL plus 2, because: added SEP and CLS word token
 
-        all_embeddings = []
-
-        for sid, sentence_spans in enumerate(inputs['word_spans']):
-            sent_embeddings = []
-            for start, end in sentence_spans:
-                emb = torch.mean(bert_x[sid][start:end], dim=-2)
-                # print('emb', tuple(emb.shape))
-                # all_embeddings.append(emb)
-                sent_embeddings.append(emb)
-            sent_embeddings = torch.stack(sent_embeddings)
-            all_embeddings.append(sent_embeddings)
- 
-        # all_embeddings = torch.stack(all_embeddings)
-
-        return all_embeddings
+        embeddings = torch.bmm(transforms,bert_x)
+        
+        return embeddings
 
 
 class MLPModel(Module):
@@ -181,28 +171,45 @@ class GCN(nn.Module):
         self.device = args.device
         
         self.c = len(args.label2index)
-        self.gc1 = GraphConvolution(8*768, 1024)
-        self.gc2 = GraphConvolution(1024, self.c)
-        self.dropout = args.dropout
+        
+        self.prj = nn.Linear(768*8, 512)
+        
+        self.gc1 = GraphConvolution(512, 512)
+        self.gc2 = GraphConvolution(512, 512)
+        
+        
+        self.all_dim = 768*8 + 512 + 512 + 512
+        
+        self.fc = Sequential(
+            Linear(self.all_dim, 1024),
+            Dropout(),
+            Tanh(),
+            Linear(1024, self.c)
+        )
 
     def forward(self, inputs):
 
-        adj_matrixs = inputs['adj_matrix']
-        embeddings = self.embeddings(inputs)
+        embeddings = self.embeddings(inputs) # B, L, D
+
+        adjs = inputs['adj_matrix'].to(self.device)
+        adj_leng = embeddings.shape[1]
+        adjs = adjs[:,:adj_leng,:adj_leng]
+
+        x = self.prj(embeddings)
+        output1 = self.gc1(x, adjs)  # B, L, D
+        output2 = self.gc2(output1, adjs)  # B, L, D
         
-        logits = torch.empty((0,self.c)).to(self.device)
+        final_reps = torch.cat([embeddings, x, output1, output2], dim=-1) # B, L, xxxD
 
-        for i in range(len(embeddings)):
-            x = embeddings[i]
-            adj = torch.from_numpy(adj_matrixs[i]).type(torch.FloatTensor).to(self.device)
-
-            x = F.relu(self.gc1(x, adj))
-            x = F.dropout(x, self.dropout, training=self.training)
-            x = self.gc2(x, adj)
-            x= F.log_softmax(x, dim=1)
-            
-            logits = torch.cat((logits, x), dim = 0)
-
+        #remove all padding,adding embedding token
+        #flatten batch words 
+        word_lengths = inputs['word_length']
+        clean_reps = torch.empty((0,self.all_dim)).to(self.device)
+        for batch,word_length in enumerate(word_lengths):
+            rep = final_reps[batch,1:word_length+1,:] #remove SEP, CLS, PADD embdding
+            clean_reps = torch.cat((clean_reps, rep), dim = 0)
+        
+        logits = self.fc(clean_reps) # B*L, C
         preds = torch.argmax(logits, dim=-1)
 
         return logits, preds
